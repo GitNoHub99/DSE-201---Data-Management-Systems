@@ -1,0 +1,206 @@
+------- MILESTONE 1 ------------------------------------------------------------------------------------------------
+
+-- Create tables
+CREATE TABLE users (
+    uid INTEGER PRIMARY KEY,
+    fname TEXT NOT NULL,
+    lname TEXT NOT NULL
+);
+
+CREATE TABLE videos (
+    vid INTEGER PRIMARY KEY,
+    vname TEXT NOT NULL
+);
+
+CREATE TABLE logins (
+    id INTEGER PRIMARY KEY,
+    uid INTEGER NOT NULL REFERENCES users(uid),
+    login_time TIMESTAMP NOT NULL
+);
+
+CREATE TABLE suggestions (
+    id INTEGER PRIMARY KEY,
+    login_id INTEGER NOT NULL REFERENCES logins(id),
+    vid INTEGER NOT NULL REFERENCES videos(vid)
+);
+
+CREATE TABLE likes (
+    uid INTEGER NOT NULL REFERENCES users(uid),
+    vid INTEGER NOT NULL REFERENCES videos(vid),
+    PRIMARY KEY (uid, vid)
+);
+
+CREATE TABLE watches (
+    id INTEGER PRIMARY KEY,
+    uid INTEGER NOT NULL REFERENCES users(uid),
+    vid INTEGER NOT NULL REFERENCES videos(vid),
+    watch_time TIMESTAMP NOT NULL
+);
+
+CREATE TABLE friendships (
+    uid1 INTEGER NOT NULL REFERENCES users(uid),
+    uid2 INTEGER NOT NULL REFERENCES users(uid),
+    PRIMARY KEY (uid1, uid2)
+);
+
+------- MILESTONE 2 ------------------------------------------------------------------------------------------------
+
+-- Query 1: “Overall Likes”: The Top-10 cat videos are the ones that have collected the highest numbers of likes, overall.
+
+SELECT 
+    V.vid,
+    V.vname,
+    COUNT(L.uid) AS like_count
+FROM videos AS V
+JOIN likes AS L ON V.vid = L.vid
+WHERE V.vid NOT IN (					-- excludes videos that user has already liked
+    SELECT vid FROM likes WHERE uid = 4744		-- change user id here to see different results
+    UNION						-- excludes videos that user has already watched
+    SELECT vid FROM watches WHERE uid = 4744		-- enter desired user
+)
+GROUP BY V.vid, V.vname
+ORDER BY like_count DESC
+LIMIT 10;
+
+
+-- Query 2: Option “Friend Likes”: The Top-10 cat videos are the ones that have collected the highest numbers of likes from the friends of X.
+
+SELECT 
+    V.vid,
+    V.vname,
+    COUNT(L.uid) AS friend_like_count
+FROM videos AS V
+JOIN likes AS L ON V.vid = L.vid
+JOIN friendships AS F ON L.uid = F.uid2			-- join on friend's likes of same vids
+WHERE F.uid1 = 2862					-- enter desired user
+  AND V.vid NOT IN (
+      SELECT vid FROM likes WHERE uid = 2862		-- enter desired user, excludes vids they already liked
+  )
+GROUP BY V.vid, V.vname
+ORDER BY friend_like_count DESC
+LIMIT 10;
+
+
+-- Query 3: Option “Friends-of-Friends Likes”: The Top-10 cat videos are the ones that have collected the highest numbers of likes from friends and friends-of-friends.
+
+SELECT 
+    V.vid,
+    V.vname,
+    COUNT(DISTINCT L.uid) AS fof_like_count			-- want unique user likes, use distinct
+FROM videos AS V
+JOIN likes AS L ON V.vid = L.vid
+WHERE L.uid IN (
+    SELECT F.uid2 FROM friendships AS F WHERE F.uid1 = 2682	-- enter desired user, direct friends
+    UNION															
+    SELECT F2.uid2 						-- friends of friends
+    FROM friendships AS F1
+    JOIN friendships AS F2 ON F1.uid2 = F2.uid1
+    WHERE F1.uid1 = 2682
+)
+AND V.vid NOT IN (
+    SELECT vid FROM likes WHERE uid = 2682  			-- enter desired user, exclude vids user already liked
+)
+GROUP BY V.vid, V.vname
+ORDER BY fof_like_count DESC
+LIMIT 10;
+
+
+-- Query 4: Option “My kind of cats”: The Top-10 cat videos are the ones that have collected the most likes from users who have liked at least one cat video that was liked by X.
+
+SELECT 
+    V.vid,
+    V.vname,
+    COUNT(L.uid) AS like_count
+FROM videos AS V
+JOIN likes AS L ON V.vid = L.vid
+WHERE L.uid IN (
+    SELECT DISTINCT L2.uid		    	-- find users who liked <= 1 vid that user X also liked
+    FROM likes AS L1
+    JOIN likes AS L2 ON L1.vid = L2.vid		-- match on same video for other user
+    WHERE L1.uid = 1 AND L2.uid != 1		-- enter desired user, exclude user X
+)
+AND V.vid NOT IN (
+    SELECT vid FROM likes WHERE uid = 1  	-- enter desired user, exclude vids user X already liked
+)
+GROUP BY V.vid, V.vname
+ORDER BY like_count DESC
+LIMIT 10;
+
+
+-- Query 5: Option “My kind of cats – with preference (to cat aficionados that have the same tastes)”: The Top-10 cat videos are the ones that have collected the highest sum of weighted likes from every
+-- other user Y (i.e., given a cat video, each like on it by user Y is multiplied by a weight assigned to user Y).
+-- Weighted recommendations using log cosine similarity lc(X,Y) = log(1 + sum of (X[i] * Y[i]) for all videos i)
+
+WITH user_similarity AS (
+    SELECT 					-- calclulate log/cos similarity b/w user 1 & all other users. 
+        L2.uid AS other_user,
+        LN(1 + COUNT(*)) AS similarity_score	-- similarity = log(1+ count of shared liked vids)
+    FROM likes AS L1				-- user 1 likes
+    JOIN likes AS L2 ON L1.vid = L2.vid  	-- vids user 1 liked that other people liked
+    WHERE L1.uid = 50  				-- enter desired user
+      AND L2.uid != 50  			-- enter desired user, filter out from L2
+    GROUP BY L2.uid
+)
+SELECT 
+    V.vid,
+    V.vname,
+	-- for each vid, get similarity score of all users who also liked. Higher scores forr vids liked by similar users
+	ROUND(CAST(SUM(US.similarity_score) AS NUMERIC), 4) AS weighted_like_score
+FROM videos AS V
+JOIN likes AS L ON V.vid = L.vid				-- get users who liked this video
+JOIN user_similarity AS US ON L.uid = US.other_user		-- weight by similiarity 
+WHERE V.vid NOT IN (						-- exclude videos user1 already liked
+    SELECT vid FROM likes WHERE uid = 50  			-- enter desired user, exclude videos user X already liked
+)
+GROUP BY V.vid, V.vname
+ORDER BY weighted_like_score DESC
+LIMIT 10;
+
+------- MILESTONE 3 ------------------------------------------------------------------------------------------------
+
+DB Stats:
+
+table name	count
+watches		0
+logins		0
+suggestions	0
+users		266397
+friendships	1048443
+likes		1048537
+videos		1000000
+
+----- Create Index -----------------------------------------------------------------
+
+CREATE INDEX idx_likes_video ON likes(vid); 		 -- All queries use likes.vid for JOIN
+CREATE INDEX idx_likes_user ON likes(uid); 		 -- All queries use likes.uid for JOIN/WHERE
+CREATE INDEX idx_friendships_user1 ON friendships(uid1); -- Queries 2 & 3 use friendships.uid1 for WHERE filter
+CREATE INDEX idx_friendships_user2 ON friendships(uid2); -- Queries 2 & 3 use friendships.uid2 for JOIN
+
+
+	Before Index			After Index				% change
+query 1	Planning Time: 6.944 ms		Planning Time: 2.226 ms			68%
+	Execution Time: 1821.219 ms	Execution Time: 1229.988 ms		32%
+Notes:  The index on likes.vid speeds up the COUNT aggregation and JOIN to videos. Improvement is moderate because the query still aggregates across all videos with likes
+
+					
+query 2	Planning Time: 0.958 ms		Planning Time: 3.191 ms			-233%
+	Execution Time: 40.829 ms	Execution Time: 1.549 ms		96%
+Notes:  Huge improvement from indexes on friendships.uid1 which filters to specific users friends as well as likes.uid  which finds likes from those friends. Transforms expensive sequential scan into efficient index scan, jumping directly to relevant friendship & like records instead of scanning millions of friendships and likes records
+
+					
+query 3	Planning Time: 0.957 ms		Planning Time: 2.809 ms			-194%
+	Execution Time: 122.956 ms	Execution Time: 128.792 ms		-5%
+Notes: Query builds a friends of friends network using the UNION of two friendship queries. While indices help individual friendship lookups, the combined result set is large and requires a lot of aggregation. Index overhead outweighs the benefits for this complex network query
+
+					
+query 4	Planning Time: 0.356 ms		Planning Time: 2.244 ms			-530%
+	Execution Time: 285.564 ms	Execution Time: 103.260 ms		64%
+Notes:  Index on likes.vid gives a fast matching of videos liked by both current user and similar users. Index on likes.uid speeds up finding users with shared interests. The selective filter (users who liked same videos as current user) benefits significantly from indexed lookup
+
+					
+query 5	Planning Time: 0.583 ms		Planning Time: 1.728 ms			-196%
+	Execution Time: 239.121 ms	Execution Time: 79.937 ms		67%
+Notes: Index on likes.vid dramatically speeds up the self join (likes.vid = likes.vid), while the index on likes.uid speeds up filtering to specific users. Similarity calculation and weighted aggregation still require a lot of computation, but indices reduce data retrieval time by quite a good amount.
+
+Summary: 
+Cats indexes are highly effective because the queries filter by specific users and rely on selective JOINs, making indexes extremely valuable. Only Query 3 struggled due to large intermediate result sets being created where index overhead exceeds benefits
