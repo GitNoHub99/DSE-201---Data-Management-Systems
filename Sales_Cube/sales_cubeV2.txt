@@ -1,0 +1,35 @@
+-- added Not Null statements. Also added decimal precision and to make sure discount/price is not null
+
+CREATE TABLE states (
+    sid INTEGER PRIMARY KEY,
+    stname TEXT NOT NULL,
+    stabbrev TEXT NOT NULL
+);
+
+CREATE TABLE categories (
+    id INTEGER PRIMARY KEY,
+    cname TEXT NOT NULL,
+    cdescr TEXT
+);
+
+CREATE TABLE customers (
+    id INTEGER PRIMARY KEY,
+    fname TEXT NOT NULL,
+    lname TEXT NOT NULL,
+    state INTEGER NOT NULL REFERENCES states(sid)
+);
+
+CREATE TABLE products (
+    id INTEGER PRIMARY KEY,
+    pname TEXT NOT NULL,
+    price NUMERIC(10, 2) NOT NULL CHECK (price >= 0),
+    cid INTEGER NOT NULL REFERENCES categories(id)
+);
+
+CREATE TABLE sales (
+    id INTEGER PRIMARY KEY,
+    pid INTEGER NOT NULL REFERENCES products(id),
+    cid INTEGER NOT NULL REFERENCES customers(id),
+    quantity INTEGER NOT NULL CHECK (quantity > 0),
+    discount NUMERIC(5, 2) NOT NULL CHECK (discount >= 0 AND discount <= 100)
+);

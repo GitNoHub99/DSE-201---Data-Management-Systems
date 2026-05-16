@@ -1,0 +1,236 @@
+------- MILESTONE 1 ------------------------------------------------------------------------------------------------
+
+-- Create Tables
+CREATE TABLE states (
+    sid INTEGER PRIMARY KEY,
+    stname TEXT NOT NULL,
+    stabbrev TEXT NOT NULL
+);
+
+CREATE TABLE categories (
+    id INTEGER PRIMARY KEY,
+    cname TEXT NOT NULL,
+    cdescr TEXT
+);
+
+CREATE TABLE customers (
+    id INTEGER PRIMARY KEY,
+    fname TEXT NOT NULL,
+    lname TEXT NOT NULL,
+    state INTEGER NOT NULL REFERENCES states(sid)
+);
+
+CREATE TABLE products (
+    id INTEGER PRIMARY KEY,
+    pname TEXT NOT NULL,
+    price NUMERIC(10, 2) NOT NULL CHECK (price >= 0),
+    cid INTEGER NOT NULL REFERENCES categories(id)
+);
+
+CREATE TABLE sales (
+    id INTEGER PRIMARY KEY,
+    pid INTEGER NOT NULL REFERENCES products(id),
+    cid INTEGER NOT NULL REFERENCES customers(id),
+    quantity INTEGER NOT NULL CHECK (quantity >= 0),
+    discount NUMERIC(5, 2) NOT NULL CHECK (discount >= 0 AND discount <= 100)
+);
+
+------- MILESTONE 2 ------------------------------------------------------------------------------------------------
+
+-- Query 1: Show the total sales (total quantity sold and total dollar value) for each customer. (If customer C has made no purchases, still output C, with 0 quantity and dollars).
+
+SELECT 
+    C.id,
+    C.fname,
+    C.lname,
+    COALESCE(SUM(S.quantity), 0) AS total_quantity, 						-- Use coalesce so customers with no sales return 0 instead of null
+    ROUND(COALESCE(SUM(S.quantity * P.price * (1 - S.discount/100)), 0), 2) AS total_sales	-- Caclulate total dollars spent/customer
+FROM customers AS C
+LEFT JOIN sales AS S ON C.id = S.cid
+LEFT JOIN products AS P ON S.pid = P.id
+GROUP BY C.id, C.fname, C.lname
+ORDER BY total_sales DESC;
+
+
+-- Query 2: Show the total sales (total quantity sold and total dollar value) for each state. (If a state has 0 sales, list it explicitly as such in the output).
+
+SELECT 
+    ST.sid,
+    ST.stname,
+    COALESCE(SUM(S.quantity), 0) AS total_quantity,
+    ROUND(COALESCE(SUM(S.quantity * P.price * (1 - S.discount/100)), 0), 2) AS total_sales
+FROM states AS ST
+LEFT JOIN customers AS C ON ST.sid = C.state
+LEFT JOIN sales AS S ON C.id = S.cid
+LEFT JOIN products AS P ON S.pid = P.id
+GROUP BY ST.sid, ST.stname
+ORDER BY total_sales DESC;
+
+
+-- Query 3: Show the total sales for each product, for a given customer. Only products that were actually bought by the given customer are listed. Order by dollar value. It is fine if your query hardcodes
+-- a specific customer id (full points). Better would be to write a parameterized query (postgres function) that takes the customer id (cust_id) as argument. Also great: list for EVERY customer.
+-- The output schema should be (pid, cust_id, total).
+
+-- Option 1 - Hardcoded customer id
+SELECT 
+    P.id AS pid,
+    4 AS cust_id,									-- Change hardcoded # to desired customer id
+    ROUND(SUM(S.quantity * P.price * (1 - S.discount/100)), 2) AS total_sales		-- Don't need coalesce since we don't care about zeroes
+FROM products AS P
+JOIN sales AS S ON P.id = S.pid
+WHERE S.cid = 4										-- Change hardcoded # to desired customer id
+GROUP BY P.id
+ORDER BY total_sales DESC;
+
+-- Option 2 - List data for all customers
+SELECT 
+    P.id AS pid,
+    S.cid AS cust_id,
+    ROUND(SUM(S.quantity * P.price * (1 - S.discount/100)), 2) AS total_sales
+FROM products AS P
+JOIN sales AS S ON P.id = S.pid
+GROUP BY P.id, S.cid
+ORDER BY S.cid, total_sales DESC;
+
+
+-- Query 4: Show the total sales for each product and customer. Order by dollar value. Compared to 3. you will return all tuples 3. returns, plus also show entries for customers C and
+-- products P such that C did not buy P (list C, P with 0 total sales).
+
+SELECT 
+    P.id AS pid,
+    C.id AS cust_id,
+    ROUND(COALESCE(SUM(S.quantity * P.price * (1 - S.discount/100)), 0), 2) AS total_sales
+FROM products AS P
+CROSS JOIN customers AS C			-- Used cross join to create every possible product/customer tuple
+LEFT JOIN sales AS S ON P.id = S.pid AND C.id = S.cid
+GROUP BY P.id, C.id
+ORDER BY total_sales DESC;
+
+
+-- Query 5: Show the total sales for each product category and state. The output schema should be (category id, state).
+
+SELECT 
+    CAT.id AS category_id,
+    ST.sid AS state_id,
+    ROUND(SUM(S.quantity * P.price * (1 - S.discount/100)), 2) AS total_sales
+FROM sales AS S
+JOIN products AS P ON S.pid = P.id		-- don't need left or cross join because I don't care about categories/states with 0 sales
+JOIN categories AS CAT ON P.cid = CAT.id
+JOIN customers AS C ON S.cid = C.id
+JOIN states AS ST ON C.state = ST.sid
+GROUP BY CAT.id, ST.sid
+ORDER BY CAT.id, total_sales DESC;
+
+
+-- Query 6: For each one of the top 20 product categories (by total revenue) and top 20 customers (by total purchase revenue), return a tuple (top product category ID, top customer ID, quantity sold,
+-- dollar value). It is possible that a top-20 customer spent $0 on a top-20 category. List this fact explicitly in the output: (id of “comic books”, id of “jane”, 0, 0) is possible. Extra credit if you can
+-- list the rank of the customer and of the category: (cat_id, cat_rank, cust_id, cust_rank, quantity, dollar value).
+
+WITH top_categories AS (		-- Find top 20 categories by total revenue
+    SELECT CAT.id AS category_id
+    FROM categories AS CAT
+    JOIN products AS P ON CAT.id = P.cid
+    JOIN sales AS S ON P.id = S.pid
+    GROUP BY CAT.id
+    ORDER BY SUM(S.quantity * P.price * (1 - S.discount/100)) DESC
+    LIMIT 20
+),
+top_customers AS (			-- Find top 20 customers by total spend
+    SELECT C.id AS customer_id
+    FROM customers AS C
+    JOIN sales AS S ON C.id = S.cid
+    JOIN products AS P ON S.pid = P.id
+    GROUP BY C.id
+    ORDER BY SUM(S.quantity * P.price * (1 - S.discount/100)) DESC
+    LIMIT 20
+),
+category_ranks AS (			-- Rank the top 20 categories. Use dense rank so ranks don't skip
+    SELECT 
+        TC.category_id,
+        DENSE_RANK() OVER (ORDER BY SUM(S.quantity * P.price * (1 - S.discount/100)) DESC) AS cat_rank
+    FROM top_categories AS TC
+    JOIN products AS P ON TC.category_id = P.cid
+    JOIN sales AS S ON P.id = S.pid
+    GROUP BY TC.category_id
+),
+customer_ranks AS (			-- Rank the top 20 customers. Use dense rank so ranks don't skip
+    SELECT 
+        TCU.customer_id,
+        DENSE_RANK() OVER (ORDER BY SUM(S.quantity * P.price * (1 - S.discount/100)) DESC) AS cust_rank
+    FROM top_customers AS TCU
+    JOIN sales AS S ON TCU.customer_id = S.cid
+    JOIN products AS P ON S.pid = P.id
+    GROUP BY TCU.customer_id
+)
+SELECT 					-- Create list of all 400 possible combos  
+    CR.category_id,
+    CR.cat_rank,
+    CUR.customer_id,
+    CUR.cust_rank,
+    COALESCE(SUM(S.quantity), 0) AS quantity_sold,
+    ROUND(COALESCE(SUM(S.quantity * P.price * (1 - S.discount/100)), 0), 2) AS dollar_value
+FROM category_ranks AS CR
+CROSS JOIN customer_ranks AS CUR
+LEFT JOIN products AS P ON CR.category_id = P.cid
+LEFT JOIN sales AS S ON P.id = S.pid AND CUR.customer_id = S.cid
+GROUP BY CR.category_id, CR.cat_rank, CUR.customer_id, CUR.cust_rank
+ORDER BY dollar_value DESC;
+
+------- MILESTONE 3 ------------------------------------------------------------------------------------------------
+
+DB Stats:
+
+table name	count
+states		50
+categories	100
+customers	887990
+products	100000
+sales		7933464
+
+----- Create Index -----------------------------------------------------------------
+
+CREATE INDEX idx_customers_state ON customers(state);     -- used in query #2
+CREATE INDEX idx_sales_customer ON sales(cid);            -- used in all queries
+CREATE INDEX idx_sales_product ON sales(pid);             -- used in all queries  
+CREATE INDEX idx_products_category ON products(cid);      -- used in query #5
+
+
+
+	Before Index			After Index			% change
+query 1	Planning Time: 0.289 ms		Planning Time: 3.846 ms		-1231%
+	Execution Time: 7970.483 ms	Execution Time: 7523.793 ms	6%
+Notes: Indices on sales.cid and sales.pid speed up the joins. Improvement is kind of small because the query still scans all customers to include those w/ 0 sales
+
+				
+query 2	Planning Time: 0.598 ms		Planning Time: 3.127 ms		-423%
+	Execution Time: 10416.562 ms	Execution Time: 9288.129 ms	11%
+Notes: Index on customers.state enables Index Scan instead of Sequential Scan when joining customers to states. Combined with indices on sales.cid and sales.pid, the DB quickly finds relevant sales records rather than scanning all 7.9M rows
+	
+			
+query 3	Planning Time: 0.177 ms		Planning Time: 1.843 ms		-941%
+option1	Execution Time: 261.395 ms	Execution Time: 0.381 ms	100%
+Notes: Big improvement on this one due to selective WHERE filter where cid = 1.  Index on sales.cid lets database jump straight to that customer's sales instead of reading all 7.9M rows
+			
+query 3	Planning Time: 0.160 ms		Planning Time: 1.874 ms		-1071%
+option2	Execution Time: 13581.916 ms	Execution Time: 18056.118 ms	-33%
+Notes: The index caused this query to run slower. No filtering, needs almost all data anyway. Index adds extra steps  like checking index, then getting data, instead of just reading everything sequentially. 
+	
+			
+query 4	long time, didn't let finish			
+Notes: creates billions of combinations. too much data for indices to help
+	
+			
+query 5	Planning Time: 0.458 ms		Planning Time: 7.186 ms		-1469%
+	Execution Time: 4592.581 ms	Execution Time: 4673.855 ms	-2%
+Notes: Processes millions of rows and does complex math. The index lookups add overhead without reducing the work. Only a slight downgrade in performance though
+
+			
+query 6	Planning Time: 1.242 ms		Planning Time: 3.800 ms		-206%
+	Execution Time: 15382.442 ms	Execution Time: 19881.869 ms	-29%
+Notes: Has to look up 400 different combinations separately. 400 index checks is slower than just reading the data once
+
+Summary: 
+Indices provided significant benefits for selective queries with WHERE filters (Query 3 option 1) and moderate JOIN operations (queries 1 & 2)
+Indices added overhead for non selective queries processing most or all rows (Query 3 option 2, queries 5 & 6), complex aggregations with cross joins, & queries requiring large result sets
+B-tree indices do well with selective lookups but can hurt performance for full table aggregations where sequential scans are more efficient. Queries 4, 5, & 6 would benefit more from precomputed materialized views than from additional indexing
+
